@@ -1,5 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import authRoutes from './routes/auth.routes';
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +20,9 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/', (_, res) => {
   res.json({ message: 'Server is running!' });
 });
+
+// API Routes
+app.use('/api/auth', authRoutes);
 
 // Error handling middleware (development: show detailed errors)
 if (NODE_ENV === 'development') {
