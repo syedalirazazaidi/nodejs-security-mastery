@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
+import User from '../models/user.model';
 import {
   registerSchema,
   loginSchema,
@@ -17,19 +19,39 @@ export const register = async (req: Request, res: Response) => {
       body: req.body
     });
     
-    const { name, email, password: _password } = validated.body;
+    const { name, email, password } = validated.body;
     
-    // TODO: Implement registration logic
-    // - Check if user already exists
-    // - Hash password
-    // - Create user
-    // - Generate JWT token
-    // - Send verification email
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email already exists'
+      });
+    }
     
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Create user
+    const user = await User.create({
+      name,
+      email,
+      password: hashedPassword
+    });
+    
+    // Return user data (without password)
     return res.status(201).json({
       success: true,
-      message: 'Registration endpoint - to be implemented',
-      data: { name, email } // Don't send password
+      message: 'User registered successfully',
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isEmailVerified: user.isEmailVerified,
+        createdAt: user.createdAt
+      }
     });
   } catch (error: any) {
     // Handle validation errors
@@ -37,13 +59,22 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
+        errors: error.issues?.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
-        }))
+        })) || []
       });
     }
     
+    // Handle duplicate email error (MongoDB)
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email already exists'
+      });
+    }
+    
+    console.error('Registration error:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error'

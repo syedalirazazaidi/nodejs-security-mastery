@@ -15,6 +15,7 @@ export const connectDB = async (): Promise<void> => {
     }
 
     const mongooseOptions = {
+      dbName: 'node-mystery' // Specify database name
       // Development: show more detailed logs
       // Production: minimal logging
     };
