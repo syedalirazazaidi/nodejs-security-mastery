@@ -6,8 +6,12 @@ import mongoose from 'mongoose';
 dotenv.config();
 
 const app = express();
+const NODE_ENV = process.env.NODE_ENV || 'development';
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
+
+// Set NODE_ENV
+process.env.NODE_ENV = NODE_ENV;
 
 // MongoDB Connection
 const connectDB = async () => {
@@ -16,7 +20,12 @@ const connectDB = async () => {
       throw new Error('MONGODB_URI is not defined in .env file');
     }
 
-    await mongoose.connect(MONGODB_URI);
+    const mongooseOptions = {
+      // Development: show more detailed logs
+      // Production: minimal logging
+    };
+
+    await mongoose.connect(MONGODB_URI, mongooseOptions);
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('❌ MongoDB connection error:', error);
@@ -26,7 +35,9 @@ const connectDB = async () => {
 
 // Mongoose connection event handlers
 mongoose.connection.on('disconnected', () => {
-  console.log('⚠️  MongoDB disconnected');
+  if (NODE_ENV === 'development') {
+    console.log('⚠️  MongoDB disconnected');
+  }
 });
 
 mongoose.connection.on('error', (err) => {
@@ -42,12 +53,30 @@ app.get('/', (_, res) => {
   res.json({ message: 'Server is running!' });
 });
 
+// Error handling middleware (development: show detailed errors)
+if (NODE_ENV === 'development') {
+  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('Error:', err);
+    res.status(500).json({
+      error: err.message,
+      stack: err.stack
+    });
+  });
+} else {
+  app.use((_err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(500).json({
+      error: 'Internal Server Error'
+    });
+  });
+}
+
 // Start server and connect to database
 const startServer = async () => {
   try {
     await connectDB();
     app.listen(PORT, () => {
       console.log(`🚀 Server is running on port ${PORT}`);
+      console.log(`📦 Environment: ${NODE_ENV}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
