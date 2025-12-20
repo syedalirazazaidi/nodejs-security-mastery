@@ -1,6 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import mongoose from 'mongoose';
+import { connectDB } from './config/db';
 
 // Load environment variables
 dotenv.config();
@@ -8,41 +8,9 @@ dotenv.config();
 const app = express();
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI;
 
 // Set NODE_ENV
 process.env.NODE_ENV = NODE_ENV;
-
-// MongoDB Connection
-const connectDB = async () => {
-  try {
-    if (!MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined in .env file');
-    }
-
-    const mongooseOptions = {
-      // Development: show more detailed logs
-      // Production: minimal logging
-    };
-
-    await mongoose.connect(MONGODB_URI, mongooseOptions);
-    console.log('✅ MongoDB connected successfully');
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
-    process.exit(1); // Exit process if connection fails
-  }
-};
-
-// Mongoose connection event handlers
-mongoose.connection.on('disconnected', () => {
-  if (NODE_ENV === 'development') {
-    console.log('⚠️  MongoDB disconnected');
-  }
-});
-
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err);
-});
 
 // Middleware
 app.use(express.json());
