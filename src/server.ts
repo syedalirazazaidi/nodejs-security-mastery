@@ -18,7 +18,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Basic route
 app.get('/', (_, res) => {
-  res.json({ message: 'Server is running!' });
+  res.json({ message: 'Server is running! on server -- -' });
 });
 
 // Error handling middleware (development: show detailed errors)
@@ -33,7 +33,7 @@ if (NODE_ENV === 'development') {
 } else {
   app.use((_err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(500).json({
-      error: 'Internal Server Error -- '
+      error: 'Internal Server Error  '
     });
   });
 }
