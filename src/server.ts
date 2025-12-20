@@ -1,42 +1,12 @@
-import express from 'express';
 import dotenv from 'dotenv';
 import { connectDB } from './config/db';
+import app from './app';
 
 // Load environment variables
 dotenv.config();
 
-const app = express();
-const NODE_ENV = process.env.NODE_ENV || 'development';
 const PORT = process.env.PORT || 5000;
-
-// Set NODE_ENV
-process.env.NODE_ENV = NODE_ENV;
-
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Basic route
-app.get('/', (_, res) => {
-  res.json({ message: 'Server is running! on server -- -' });
-});
-
-// Error handling middleware (development: show detailed errors)
-if (NODE_ENV === 'development') {
-  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error('Error:', err);
-    res.status(500).json({
-      error: err.message,
-      stack: err.stack
-    });
-  });
-} else {
-  app.use((_err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status(500).json({
-      error: 'Internal Server Error  '
-    });
-  });
-}
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // Start server and connect to database
 const startServer = async () => {
@@ -53,4 +23,3 @@ const startServer = async () => {
 };
 
 startServer();
-
