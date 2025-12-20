@@ -33,7 +33,7 @@ if (NODE_ENV === 'development') {
 } else {
   app.use((_err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(500).json({
-      error: 'Internal Server Error'
+      error: 'Internal Server Error -- '
     });
   });
 }
