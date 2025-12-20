@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import bcrypt from 'bcryptjs';
 import User from '../models/user.model';
+import { hashPassword } from '../lib/password';
 import {
   registerSchema,
   loginSchema,
@@ -31,7 +31,7 @@ export const register = async (req: Request, res: Response) => {
     }
     
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await hashPassword(password);
     
     // Create user
     const user = await User.create({
