@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import User from '../models/user.model';
-import { hashPassword } from '../lib/password';
+import { hashPassword, comparePassword } from '../lib/password';
 import { sendVerificationEmail } from '../lib/email';
 import { generateToken } from '../lib/jwt';
 import {
@@ -119,19 +119,57 @@ export const login = async (req: Request, res: Response) => {
       body: req.body
     });
     
-    const { email, password: _password } = validated.body;
+    const { email, password } = validated.body;
     
-    // TODO: Implement login logic
-    // - Find user by email
-    // - Compare password
-    // - Check if email is verified
-    // - Generate JWT token
-    // - Return token
+    // Find user by email (include password for comparison)
+    const user = await User.findOne({ email }).select('+password');
     
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    }
+    
+    // Compare password
+    const isPasswordValid = await comparePassword(password, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    }
+    
+    // Check if email is verified - REQUIRED for login
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your email before logging in. Check your inbox for the verification email.',
+        error: 'EMAIL_NOT_VERIFIED'
+      });
+    }
+    
+    // Generate JWT token
+    const token = generateToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+    
+    // Return user data with JWT token (without password)
     return res.status(200).json({
       success: true,
-      message: 'Login endpoint - to be implemented',
-      data: { email } // Don't send password
+      message: 'Login successful',
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isEmailVerified: user.isEmailVerified
+      },
+      token
     });
   } catch (error: any) {
     // Handle validation errors
@@ -139,10 +177,10 @@ export const login = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
+        errors: error.issues?.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
-        }))
+        })) || []
       });
     }
     
