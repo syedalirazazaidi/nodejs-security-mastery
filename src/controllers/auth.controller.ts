@@ -53,9 +53,11 @@ export const register = async (req: Request, res: Response) => {
     // Send verification email
     try {
       await sendVerificationEmail(email, emailVerificationToken, name);
-    } catch (emailError) {
-      console.error('Failed to send verification email:', emailError);
-      // Don't fail registration if email fails, just log it
+      console.log(`✅ Verification email sent to ${email}`);
+    } catch (emailError: any) {
+      console.error('❌ Failed to send verification email:', emailError.message);
+      // Don't fail registration if email fails, but log the error
+      // User can request resend verification email later
     }
     
     // Generate JWT token
