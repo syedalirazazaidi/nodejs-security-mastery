@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import User from '../models/user.model';
 import { hashPassword } from '../lib/password';
 import { sendVerificationEmail } from '../lib/email';
+import { generateToken } from '../lib/jwt';
 import {
   registerSchema,
   loginSchema,
@@ -57,7 +58,15 @@ export const register = async (req: Request, res: Response) => {
       // Don't fail registration if email fails, just log it
     }
     
-    // Return user data (without password)
+    // Generate JWT token
+    const token = generateToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+    
+    // Return user data with JWT token (without password)
     return res.status(201).json({
       success: true,
       message: 'User registered successfully. Please check your email to verify your account.',
@@ -68,7 +77,8 @@ export const register = async (req: Request, res: Response) => {
         role: user.role,
         isEmailVerified: user.isEmailVerified,
         createdAt: user.createdAt
-      }
+      },
+      token
     });
   } catch (error: any) {
     // Handle validation errors
