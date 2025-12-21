@@ -7,6 +7,8 @@ export interface IUser extends Document {
   password: string;
   role: 'user' | 'admin';
   isEmailVerified: boolean;
+  emailVerificationToken?: string;
+  emailVerificationExpires?: Date;
   isTwoFactorEnabled: boolean;
   twoFactorSecret?: string;
   twoFactorBackupCodes?: string[];
@@ -49,6 +51,14 @@ const userSchema = new Schema<IUser>(
     isEmailVerified: {
       type: Boolean,
       default: false
+    },
+    emailVerificationToken: {
+      type: String,
+      select: false // Don't return token by default in queries
+    },
+    emailVerificationExpires: {
+      type: Date,
+      select: false // Don't return expiration by default in queries
     },
     isTwoFactorEnabled: {
       type: Boolean,

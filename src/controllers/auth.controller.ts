@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import User from '../models/user.model';
 import { hashPassword } from '../lib/password';
+import { sendVerificationEmail } from '../lib/email';
 import {
   registerSchema,
   loginSchema,
@@ -33,17 +35,32 @@ export const register = async (req: Request, res: Response) => {
     // Hash password
     const hashedPassword = await hashPassword(password);
     
+    // Generate email verification token
+    const emailVerificationToken = crypto.randomBytes(32).toString('hex');
+    const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    
     // Create user
     const user = await User.create({
       name,
       email,
-      password: hashedPassword
+      password: hashedPassword,
+      emailVerificationToken,
+      emailVerificationExpires
     });
+   
+    
+    // Send verification email
+    try {
+      await sendVerificationEmail(email, emailVerificationToken, name);
+    } catch (emailError) {
+      console.error('Failed to send verification email:', emailError);
+      // Don't fail registration if email fails, just log it
+    }
     
     // Return user data (without password)
     return res.status(201).json({
       success: true,
-      message: 'User registered successfully',
+      message: 'User registered successfully. Please check your email to verify your account.',
       data: {
         id: user._id,
         name: user.name,
@@ -285,13 +302,34 @@ export const verifyEmail = async (req: Request, res: Response) => {
       body: req.body
     });
     
-    const { token: _token } = validated.body;
+    const { token } = validated.body;
     
-    // TODO: Implement email verification logic
-    // - Find user by verification token
-    // - Check if token is not expired
-    // - Set isEmailVerified to true
-    // - Clear verification token
+    // Find user by verification token and check if token is not expired
+    const user = await User.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: Date.now() }
+    }).select('+emailVerificationToken +emailVerificationExpires');
+    
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired verification token'
+      });
+    }
+    
+    // Check if email is already verified
+    if (user.isEmailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is already verified'
+      });
+    }
+    
+    // Verify email
+    user.isEmailVerified = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save();
     
     return res.status(200).json({
       success: true,
@@ -303,10 +341,10 @@ export const verifyEmail = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
+        errors: error.issues?.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
-        }))
+        })) || []
       });
     }
     
