@@ -499,20 +499,70 @@ export const changePassword = async (req: Request, res: Response) => {
       body: req.body
     });
     
-    // User should be authenticated (from auth middleware)
-    const { currentPassword: _currentPassword, newPassword: _newPassword } = validated.body;
-    // const userId = req.user?.id; // From auth middleware
+    const { currentPassword, newPassword } = validated.body;
     
-    // TODO: Implement change password logic
-    // - Get current user
-    // - Verify current password
-    // - Hash new password
-    // - Update password
-    // - Increment tokenVersion to invalidate all existing tokens
+    // Get user from authentication middleware
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+    
+    // Find user with password field
+    const user = await User.findById(userId).select('+password');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Verify current password
+    const isPasswordValid = await comparePassword(currentPassword, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+    
+    // Check if new password is different from current password
+    const isSamePassword = await comparePassword(newPassword, user.password);
+    
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from current password'
+      });
+    }
+    
+    // Hash new password
+    const hashedPassword = await hashPassword(newPassword);
+    
+    // Update password
+    user.password = hashedPassword;
+    
+    // Increment tokenVersion to invalidate all existing tokens (security measure)
+    user.tokenVersion += 1;
+    
+    // Clear refresh token (force re-login for security)
+    user.refreshToken = undefined;
+    user.refreshTokenExpires = undefined;
+    
+    await user.save();
+    
+    // Clear cookies (force re-login)
+    res.clearCookie('accessToken', { path: '/' });
+    res.clearCookie('refreshToken', { path: '/' });
     
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      message: 'Password changed successfully. Please login again with your new password.'
     });
   } catch (error: any) {
     // Handle validation errors
@@ -520,13 +570,14 @@ export const changePassword = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
+        errors: error.issues?.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
-        }))
+        })) || []
       });
     }
     
+    console.error('Change password error:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error'

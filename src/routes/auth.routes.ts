@@ -7,9 +7,10 @@ import {
   forgotPassword,
   resetPassword,
   verifyEmail,
-  resendVerification
-  // changePassword - will be used when authentication middleware is added
+  resendVerification,
+  changePassword
 } from '../controllers/auth.controller';
+import { authenticate } from '../middleware/auth';
 
 const router = Router();
 
@@ -24,7 +25,7 @@ router.post('/verify-email', verifyEmail);
 router.post('/resend-verification', resendVerification);
 
 // Protected routes (require authentication)
-// router.post('/change-password', authenticate, changePassword);
+router.post('/change-password', authenticate, changePassword);
 
 export default router;
 
