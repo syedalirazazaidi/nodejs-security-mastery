@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import User from '../models/user.model';
 import { hashPassword, comparePassword } from '../lib/password';
-import { sendVerificationEmail } from '../lib/email';
+import { sendVerificationEmail, sendPasswordResetEmail } from '../lib/email';
 import { generateAccessToken, generateRefreshToken, verifyToken } from '../lib/jwt';
 import {
   registerSchema,
@@ -371,14 +371,34 @@ export const forgotPassword = async (req: Request, res: Response) => {
       body: req.body
     });
     
-    const { email: _email } = validated.body;
+    const { email } = validated.body;
     
-    // TODO: Implement forgot password logic
-    // - Find user by email
-    // - Generate reset token
-    // - Set resetPasswordToken and resetPasswordExpires
-    // - Send reset email
+    // Find user by email
+    const user = await User.findOne({ email }).select('+resetPasswordToken +resetPasswordExpires');
     
+    // Always return success message (security best practice - don't reveal if email exists)
+    // But only send email if user exists
+    if (user) {
+      // Generate password reset token
+      const resetToken = crypto.randomBytes(32).toString('hex');
+      const resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+      
+      // Save reset token to user
+      user.resetPasswordToken = resetToken;
+      user.resetPasswordExpires = resetPasswordExpires;
+      await user.save();
+      
+      // Send password reset email
+      try {
+        await sendPasswordResetEmail(email, resetToken, user.name);
+        console.log(`✅ Password reset email sent to ${email}`);
+      } catch (emailError: any) {
+        console.error('❌ Failed to send password reset email:', emailError.message);
+        // Don't fail the request if email fails - user can request again
+      }
+    }
+    
+    // Always return success (security: don't reveal if email exists)
     return res.status(200).json({
       success: true,
       message: 'If an account exists with this email, a password reset link has been sent'
@@ -389,13 +409,14 @@ export const forgotPassword = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
+        errors: error.issues?.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
-        }))
+        })) || []
       });
     }
     
+    console.error('Forgot password error:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -411,19 +432,43 @@ export const resetPassword = async (req: Request, res: Response) => {
       body: req.body
     });
     
-    const { token: _token, password: _password } = validated.body;
+    const { token, password } = validated.body;
     
-    // TODO: Implement reset password logic
-    // - Find user by resetPasswordToken
-    // - Check if token is not expired
-    // - Hash new password
-    // - Update password
-    // - Clear resetPasswordToken and resetPasswordExpires
-    // - Increment tokenVersion to invalidate all existing tokens
+    // Find user by reset token and check if token is not expired
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() } // Token must not be expired
+    }).select('+resetPasswordToken +resetPasswordExpires +password');
+    
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+    
+    // Hash new password
+    const hashedPassword = await hashPassword(password);
+    
+    // Update password
+    user.password = hashedPassword;
+    
+    // Clear reset token fields
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    
+    // Increment tokenVersion to invalidate all existing tokens (security measure)
+    user.tokenVersion += 1;
+    
+    // Clear refresh token (force re-login)
+    user.refreshToken = undefined;
+    user.refreshTokenExpires = undefined;
+    
+    await user.save();
     
     return res.status(200).json({
       success: true,
-      message: 'Password reset successful'
+      message: 'Password reset successful. Please login with your new password.'
     });
   } catch (error: any) {
     // Handle validation errors
@@ -431,13 +476,14 @@ export const resetPassword = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
+        errors: error.issues?.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
-        }))
+        })) || []
       });
     }
     
+    console.error('Reset password error:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error'
