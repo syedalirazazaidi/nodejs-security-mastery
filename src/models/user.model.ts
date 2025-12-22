@@ -13,6 +13,8 @@ export interface IUser extends Document {
   twoFactorSecret?: string;
   twoFactorBackupCodes?: string[];
   tokenVersion: number;
+  refreshToken?: string;
+  refreshTokenExpires?: Date;
   resetPasswordToken?: string;
   resetPasswordExpires?: Date;
   createdAt: Date;
@@ -75,6 +77,14 @@ const userSchema = new Schema<IUser>(
     tokenVersion: {
       type: Number,
       default: 0
+    },
+    refreshToken: {
+      type: String,
+      select: false // Don't return refresh token by default in queries
+    },
+    refreshTokenExpires: {
+      type: Date,
+      select: false // Don't return expiration by default in queries
     },
     resetPasswordToken: {
       type: String,

@@ -1,5 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth.routes';
 
 // Load environment variables
@@ -15,6 +16,7 @@ const app = express();
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Basic route
 app.get('/', (_, res) => {

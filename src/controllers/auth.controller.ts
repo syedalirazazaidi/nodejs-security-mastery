@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import User from '../models/user.model';
 import { hashPassword, comparePassword } from '../lib/password';
 import { sendVerificationEmail } from '../lib/email';
-import { generateToken } from '../lib/jwt';
+import { generateAccessToken, generateRefreshToken, verifyToken } from '../lib/jwt';
 import {
   registerSchema,
   loginSchema,
@@ -13,6 +13,32 @@ import {
   verifyEmailSchema,
   resendVerificationSchema
 } from './auth.schema';
+
+// Cookie options helper
+const getCookieOptions = () => {
+  const NODE_ENV = process.env.NODE_ENV || 'development';
+  
+  return {
+    httpOnly: true, // Prevents JavaScript access (XSS protection)
+    secure: NODE_ENV === 'production', // Only send over HTTPS in production
+    sameSite: 'strict' as const, // CSRF protection
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days (for refresh token)
+    path: '/' // Available for all routes
+  };
+};
+
+// Access token cookie options (shorter expiration)
+const getAccessTokenCookieOptions = () => {
+  const NODE_ENV = process.env.NODE_ENV || 'development';
+  
+  return {
+    httpOnly: true,
+    secure: NODE_ENV === 'production',
+    sameSite: 'strict' as const,
+    maxAge: 15 * 60 * 1000, // 15 minutes (for access token)
+    path: '/'
+  };
+};
 
 // Register controller
 export const register = async (req: Request, res: Response) => {
@@ -60,15 +86,32 @@ export const register = async (req: Request, res: Response) => {
       // User can request resend verification email later
     }
     
-    // Generate JWT token
-    const token = generateToken({
+    // Generate Access Token and Refresh Token
+    const accessToken = generateAccessToken({
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
       tokenVersion: user.tokenVersion
     });
     
-    // Return user data with JWT token (without password)
+    const refreshToken = generateRefreshToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+    
+    // Store refresh token in database
+    const refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    user.refreshToken = refreshToken;
+    user.refreshTokenExpires = refreshTokenExpires;
+    await user.save();
+    
+    // Set tokens in cookies
+    res.cookie('accessToken', accessToken, getAccessTokenCookieOptions());
+    res.cookie('refreshToken', refreshToken, getCookieOptions());
+    
+    // Return user data (tokens are in cookies, but also return in response for flexibility)
     return res.status(201).json({
       success: true,
       message: 'User registered successfully. Please check your email to verify your account.',
@@ -80,7 +123,8 @@ export const register = async (req: Request, res: Response) => {
         isEmailVerified: user.isEmailVerified,
         createdAt: user.createdAt
       },
-      token
+      accessToken, // Still return for mobile apps/API clients
+      refreshToken // Still return for mobile apps/API clients
     });
   } catch (error: any) {
     // Handle validation errors
@@ -150,15 +194,32 @@ export const login = async (req: Request, res: Response) => {
       });
     }
     
-    // Generate JWT token
-    const token = generateToken({
+    // Generate Access Token and Refresh Token
+    const accessToken = generateAccessToken({
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
       tokenVersion: user.tokenVersion
     });
     
-    // Return user data with JWT token (without password)
+    const refreshToken = generateRefreshToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+    
+    // Store refresh token in database
+    const refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    user.refreshToken = refreshToken;
+    user.refreshTokenExpires = refreshTokenExpires;
+    await user.save();
+    
+    // Set tokens in cookies
+    res.cookie('accessToken', accessToken, getAccessTokenCookieOptions());
+    res.cookie('refreshToken', refreshToken, getCookieOptions());
+    
+    // Return user data (tokens are in cookies, but also return in response for flexibility)
     return res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -169,7 +230,8 @@ export const login = async (req: Request, res: Response) => {
         role: user.role,
         isEmailVerified: user.isEmailVerified
       },
-      token
+      accessToken, // Still return for mobile apps/API clients
+      refreshToken // Still return for mobile apps/API clients
     });
   } catch (error: any) {
     // Handle validation errors
@@ -191,27 +253,109 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
-// Logout controller
-export const logout = async (_req: Request, res: Response) => {
+// Refresh token controller
+export const refreshToken = async (req: Request, res: Response) => {
   try {
-    // TODO: Implement logout logic
-    return res.status(200).json({
-      success: true,
-      message: 'Logout endpoint - to be implemented'
-    });
-  } catch (error: any) {
-    // Handle validation errors
-    if (error.name === 'ZodError') {
-      return res.status(400).json({
+    // Get refresh token from cookie or body (for flexibility)
+    const token = req.cookies.refreshToken || req.body.refreshToken;
+    
+    if (!token) {
+      return res.status(401).json({
         success: false,
-        message: 'Validation error',
-        errors: error.errors.map((err: any) => ({
-          path: err.path.join('.'),
-          message: err.message
-        }))
+        message: 'Refresh token is required'
       });
     }
     
+    // Verify refresh token
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired refresh token'
+      });
+    }
+    
+    // Find user and check if refresh token matches
+    const user = await User.findById(decoded.userId).select('+refreshToken +refreshTokenExpires');
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Check if refresh token matches and is not expired
+    if (user.refreshToken !== token || !user.refreshTokenExpires || user.refreshTokenExpires < new Date()) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired refresh token'
+      });
+    }
+    
+    // Check token version (for token invalidation)
+    if (user.tokenVersion !== decoded.tokenVersion) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token has been invalidated. Please login again.'
+      });
+    }
+    
+    // Generate new access token
+    const accessToken = generateAccessToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+    
+    // Set new access token in cookie
+    res.cookie('accessToken', accessToken, getAccessTokenCookieOptions());
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Token refreshed successfully',
+      accessToken // Still return for mobile apps/API clients
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Logout controller
+export const logout = async (req: Request, res: Response) => {
+  try {
+    // Get refresh token from cookie, body, or header (for flexibility)
+    const refreshToken = req.cookies.refreshToken || req.body.refreshToken || req.headers['x-refresh-token'];
+    
+    if (refreshToken) {
+      // Verify and find user
+      const decoded = verifyToken(refreshToken as string);
+      
+      if (decoded) {
+        const user = await User.findById(decoded.userId);
+        if (user) {
+          // Invalidate refresh token in database
+          user.refreshToken = undefined;
+          user.refreshTokenExpires = undefined;
+          await user.save();
+        }
+      }
+    }
+    
+    // Clear cookies
+    res.clearCookie('accessToken', { path: '/' });
+    res.clearCookie('refreshToken', { path: '/' });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Logout successful'
+    });
+  } catch (error: any) {
     return res.status(500).json({
       success: false,
       message: 'Internal server error'

@@ -53,7 +53,7 @@ export const sendVerificationEmail = async (
   try {
     const transporter = createTransporter();
     
-    const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+    const verificationUrl = `${process.env.PORT || 'http://localhost:5000'}/verify-email?token=${verificationToken}`;
     
     const mailOptions = {
       from: process.env.EMAIL_FROM || 'noreply@example.com',
@@ -100,7 +100,7 @@ export const sendPasswordResetEmail = async (
 ): Promise<void> => {
   const transporter = createTransporter();
   
-  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
+  const resetUrl = `${process.env.PORT || 'http://localhost:5000'}/reset-password?token=${resetToken}`;
   
   const mailOptions = {
     from: process.env.EMAIL_FROM || 'akuraza6@gmail.com',
