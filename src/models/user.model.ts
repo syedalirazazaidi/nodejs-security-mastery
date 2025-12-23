@@ -4,7 +4,8 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IUser extends Document {
   name: string;
   email: string;
-  password: string;
+  password?: string; // Optional for OAuth users
+  googleId?: string; // Google OAuth ID
   role: 'user' | 'admin';
   isEmailVerified: boolean;
   emailVerificationToken?: string;
@@ -41,9 +42,18 @@ const userSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: function (this: IUser) {
+        // Password required only if not using OAuth
+        return !this.googleId;
+      },
       minlength: [6, 'Password must be at least 6 characters'],
       select: false // Don't return password by default in queries
+    },
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true, // Allows multiple null values
+      select: false // Don't return googleId by default in queries
     },
     role: {
       type: String,
@@ -52,7 +62,10 @@ const userSchema = new Schema<IUser>(
     },
     isEmailVerified: {
       type: Boolean,
-      default: false
+      default: function (this: IUser) {
+        // Auto-verify email for OAuth users
+        return !!this.googleId;
+      }
     },
     emailVerificationToken: {
       type: String,

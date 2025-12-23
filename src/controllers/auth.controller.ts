@@ -1,9 +1,13 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
 import User from '../models/user.model';
 import { hashPassword, comparePassword } from '../lib/password';
 import { sendVerificationEmail, sendPasswordResetEmail } from '../lib/email';
 import { generateAccessToken, generateRefreshToken, verifyToken } from '../lib/jwt';
+import dotenv from 'dotenv';
+
+dotenv.config();
 import {
   registerSchema,
   loginSchema,
@@ -172,6 +176,14 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
+      });
+    }
+    
+    // Check if user has a password (OAuth users might not have one)
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: 'This account uses Google OAuth. Please use Google to sign in.'
       });
     }
     
@@ -521,6 +533,22 @@ export const changePassword = async (req: Request, res: Response) => {
       });
     }
     
+    // Check if user has a password (OAuth users might not have one)
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message: 'This account uses Google OAuth. Please use Google to sign in.'
+      });
+    }
+    
+    // Check if user has a password (OAuth users might not have one)
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message: 'This account uses Google OAuth. Please use Google to sign in.'
+      });
+    }
+    
     // Verify current password
     const isPasswordValid = await comparePassword(currentPassword, user.password);
     
@@ -683,6 +711,153 @@ export const resendVerification = async (req: Request, res: Response) => {
       success: false,
       message: 'Internal server error'
     });
+  }
+};
+
+// Google OAuth2 Client
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback'
+);
+
+// Google OAuth - Initiate login
+export const googleAuth = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      res.status(500).json({
+        success: false,
+        message: 'Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env file.'
+      });
+      return;
+    }
+
+    const authUrl = googleClient.generateAuthUrl({
+      access_type: 'offline',
+      scope: [
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile'
+      ],
+      prompt: 'consent' // Force consent screen to get refresh token
+    });
+
+    res.redirect(authUrl);
+  } catch (error: any) {
+    console.error('Google auth error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to initiate Google authentication'
+    });
+    return;
+  }
+};
+
+// Google OAuth - Callback handler
+export const googleCallback = async (req: Request, res: Response) => {
+  try {
+    const { code } = req.query;
+
+    if (!code || typeof code !== 'string') {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Authorization code is required')}`);
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Google OAuth is not configured')}`);
+    }
+
+    // Exchange code for tokens
+    const { tokens } = await googleClient.getToken(code);
+    googleClient.setCredentials(tokens);
+
+    if (!tokens.id_token) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Failed to get ID token from Google')}`);
+    }
+
+    // Get user info from Google
+    const ticket = await googleClient.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+
+    const payload = ticket.getPayload();
+    
+    if (!payload) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Failed to get user information from Google')}`);
+    }
+
+    const { sub: googleId, email, name } = payload;
+
+    if (!email) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Email is required from Google account')}`);
+    }
+
+    // Check if user exists by googleId or email
+    let user = await User.findOne({
+      $or: [
+        { googleId },
+        { email: email.toLowerCase() }
+      ]
+    });
+
+    if (user) {
+      // User exists - update googleId if not set
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.isEmailVerified = true; // Google emails are verified
+        await user.save();
+      }
+    } else {
+      // Create new user
+      user = await User.create({
+        name: name || 'Google User',
+        email: email.toLowerCase(),
+        googleId,
+        isEmailVerified: true, // Google emails are verified
+        role: 'user'
+      });
+    }
+
+    // Generate JWT tokens
+    const accessToken = generateAccessToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+
+    const refreshToken = generateRefreshToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+
+    // Store refresh token in database
+    const refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    user.refreshToken = refreshToken;
+    user.refreshTokenExpires = refreshTokenExpires;
+    await user.save();
+
+    // Set tokens in cookies
+    res.cookie('accessToken', accessToken, getAccessTokenCookieOptions());
+    res.cookie('refreshToken', refreshToken, getCookieOptions());
+
+    // Redirect to frontend with tokens (or return JSON)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const redirectUrl = `${frontendUrl}/auth/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`;
+    
+    res.redirect(redirectUrl);
+  } catch (error: any) {
+    console.error('Google callback error:', error);
+    
+    // Redirect to frontend with error
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Google authentication failed')}`);
   }
 };
 
