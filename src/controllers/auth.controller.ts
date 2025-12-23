@@ -714,20 +714,51 @@ export const resendVerification = async (req: Request, res: Response) => {
   }
 };
 
-// Google OAuth2 Client
-const googleClient = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback'
-);
+// Helper function to create Google OAuth client
+const createGoogleClient = () => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback';
+  
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+  
+  return new OAuth2Client(clientId, clientSecret, redirectUri);
+};
 
 // Google OAuth - Initiate login
 export const googleAuth = async (_req: Request, res: Response): Promise<void> => {
   try {
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    // Reload environment variables (in case .env was updated)
+    dotenv.config();
+    
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    
+    if (!clientId || !clientSecret) {
+      console.error('Google OAuth config check:', {
+        GOOGLE_CLIENT_ID: clientId ? `SET (${clientId.substring(0, 20)}...)` : 'NOT SET',
+        GOOGLE_CLIENT_SECRET: clientSecret ? 'SET (***)' : 'NOT SET',
+        NODE_ENV: process.env.NODE_ENV
+      });
       res.status(500).json({
         success: false,
-        message: 'Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env file.'
+        message: 'Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env file.',
+        debug: {
+          clientIdSet: !!clientId,
+          clientSecretSet: !!clientSecret
+        }
+      });
+      return;
+    }
+
+    const googleClient = createGoogleClient();
+    
+    if (!googleClient) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to initialize Google OAuth client'
       });
       return;
     }
@@ -762,9 +793,19 @@ export const googleCallback = async (req: Request, res: Response) => {
       return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Authorization code is required')}`);
     }
 
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    
+    if (!clientId || !clientSecret) {
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Google OAuth is not configured')}`);
+    }
+
+    const googleClient = createGoogleClient();
+    
+    if (!googleClient) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Failed to initialize Google OAuth client')}`);
     }
 
     // Exchange code for tokens
@@ -779,7 +820,7 @@ export const googleCallback = async (req: Request, res: Response) => {
     // Get user info from Google
     const ticket = await googleClient.verifyIdToken({
       idToken: tokens.id_token,
-      audience: process.env.GOOGLE_CLIENT_ID
+      audience: clientId
     });
 
     const payload = ticket.getPayload();
