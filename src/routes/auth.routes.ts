@@ -10,7 +10,11 @@ import {
   resendVerification,
   changePassword,
   googleAuth,
-  googleCallback
+  googleCallback,
+  enableTwoFactor,
+  verifyTwoFactorSetup,
+  verifyTwoFactorLogin,
+  disableTwoFactor
 } from '../controllers/auth.controller';
 import { authenticate } from '../middleware/auth';
 
@@ -30,8 +34,14 @@ router.post('/resend-verification', resendVerification);
 router.get('/google', googleAuth); // Initiate Google OAuth
 router.get('/google/callback', googleCallback); // Google OAuth callback
 
+// 2FA routes
+router.post('/verify-2fa-login', verifyTwoFactorLogin); // Verify 2FA during login (public)
+
 // Protected routes (require authentication)
 router.post('/change-password', authenticate, changePassword);
+router.post('/enable-2fa', authenticate, enableTwoFactor); // Enable 2FA
+router.post('/verify-2fa-setup', authenticate, verifyTwoFactorSetup); // Verify 2FA setup
+router.post('/disable-2fa', authenticate, disableTwoFactor); // Disable 2FA
 
 export default router;
 

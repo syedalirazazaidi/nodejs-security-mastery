@@ -5,6 +5,7 @@ import User from '../models/user.model';
 import { hashPassword, comparePassword } from '../lib/password';
 import { sendVerificationEmail, sendPasswordResetEmail } from '../lib/email';
 import { generateAccessToken, generateRefreshToken, verifyToken } from '../lib/jwt';
+import { generateTwoFactorSecret, verifyTwoFactorToken, generateBackupCodes, verifyBackupCode } from '../lib/twoFactor';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -15,7 +16,10 @@ import {
   resetPasswordSchema,
   changePasswordSchema,
   verifyEmailSchema,
-  resendVerificationSchema
+  resendVerificationSchema,
+  verifyTwoFactorSetupSchema,
+  verifyTwoFactorLoginSchema,
+  disableTwoFactorSchema
 } from './auth.schema';
 
 // Cookie options helper
@@ -203,6 +207,17 @@ export const login = async (req: Request, res: Response) => {
         success: false,
         message: 'Please verify your email before logging in. Check your inbox for the verification email.',
         error: 'EMAIL_NOT_VERIFIED'
+      });
+    }
+    
+    // Check if 2FA is enabled
+    if (user.isTwoFactorEnabled) {
+      // Return response indicating 2FA is required
+      return res.status(200).json({
+        success: true,
+        message: '2FA verification required',
+        requiresTwoFactor: true,
+        userId: user._id.toString()
       });
     }
     
@@ -899,6 +914,347 @@ export const googleCallback = async (req: Request, res: Response) => {
     // Redirect to frontend with error
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent('Google authentication failed')}`);
+  }
+};
+
+// Enable 2FA - Generate secret and QR code
+export const enableTwoFactor = async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const user = await User.findById(userId).select('+twoFactorSecret');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if 2FA is already enabled
+    if (user.isTwoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is already enabled'
+      });
+    }
+
+    // Generate secret and QR code
+    const { secret, qrCodeUrl } = await generateTwoFactorSecret(
+      user.email,
+      'NodeJS Mystery'
+    );
+
+    // Store secret temporarily (not enabled yet - user needs to verify)
+    user.twoFactorSecret = secret;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Scan the QR code with your authenticator app',
+      data: {
+        secret, // For manual entry if QR code doesn't work
+        qrCodeUrl, // QR code as data URL (base64 image)
+        manualEntryKey: secret // Same as secret, for manual entry
+      }
+    });
+  } catch (error: any) {
+    console.error('Enable 2FA error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Verify 2FA setup - Verify code to enable 2FA
+export const verifyTwoFactorSetup = async (req: Request, res: Response) => {
+  try {
+    const validated = await verifyTwoFactorSetupSchema.parseAsync({
+      body: req.body
+    });
+
+    const { token } = validated.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const user = await User.findById(userId).select('+twoFactorSecret');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (!user.twoFactorSecret) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA secret not found. Please enable 2FA first.'
+      });
+    }
+
+    // Verify token
+    const isValid = verifyTwoFactorToken(token, user.twoFactorSecret);
+
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid 2FA token. Please try again.'
+      });
+    }
+
+    // Enable 2FA and generate backup codes
+    user.isTwoFactorEnabled = true;
+    const backupCodes = generateBackupCodes(10);
+    user.twoFactorBackupCodes = backupCodes;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: '2FA enabled successfully',
+      data: {
+        backupCodes // User should save these codes securely
+      },
+      warning: 'Please save these backup codes in a safe place. You will need them if you lose access to your authenticator app.'
+    });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: error.issues?.map((err: any) => ({
+          path: err.path.join('.'),
+          message: err.message
+        })) || []
+      });
+    }
+
+    console.error('Verify 2FA setup error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Verify 2FA during login
+export const verifyTwoFactorLogin = async (req: Request, res: Response) => {
+  try {
+    const validated = await verifyTwoFactorLoginSchema.parseAsync({
+      body: req.body
+    });
+
+    const { token, backupCode } = validated.body;
+    const { userId } = req.body; // Should be sent from frontend after initial login
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await User.findById(userId).select('+twoFactorSecret +twoFactorBackupCodes');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (!user.isTwoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is not enabled for this account'
+      });
+    }
+
+    let isValid = false;
+
+    // Check backup code first (if provided)
+    if (backupCode && user.twoFactorBackupCodes && user.twoFactorBackupCodes.length > 0) {
+      isValid = verifyBackupCode(backupCode, user.twoFactorBackupCodes);
+      
+      if (isValid) {
+        // Remove used backup code
+        user.twoFactorBackupCodes = user.twoFactorBackupCodes.filter(
+          code => code.toUpperCase() !== backupCode.toUpperCase().trim()
+        );
+        await user.save();
+      }
+    } else if (token && user.twoFactorSecret) {
+      // Verify TOTP token
+      isValid = verifyTwoFactorToken(token, user.twoFactorSecret);
+    }
+
+    if (!isValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid 2FA token or backup code'
+      });
+    }
+
+    // Generate JWT tokens
+    const accessToken = generateAccessToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+
+    const refreshToken = generateRefreshToken({
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion
+    });
+
+    // Store refresh token in database
+    const refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    user.refreshToken = refreshToken;
+    user.refreshTokenExpires = refreshTokenExpires;
+    await user.save();
+
+    // Set tokens in cookies
+    res.cookie('accessToken', accessToken, getAccessTokenCookieOptions());
+    res.cookie('refreshToken', refreshToken, getCookieOptions());
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isEmailVerified: user.isEmailVerified
+      },
+      accessToken,
+      refreshToken
+    });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: error.issues?.map((err: any) => ({
+          path: err.path.join('.'),
+          message: err.message
+        })) || []
+      });
+    }
+
+    console.error('Verify 2FA login error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Disable 2FA
+export const disableTwoFactor = async (req: Request, res: Response) => {
+  try {
+    const validated = await disableTwoFactorSchema.parseAsync({
+      body: req.body
+    });
+
+    const { password, token } = validated.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const user = await User.findById(userId).select('+password +twoFactorSecret');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (!user.isTwoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is not enabled'
+      });
+    }
+
+    // Verify password
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required to disable 2FA'
+      });
+    }
+
+    const isPasswordValid = await comparePassword(password, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid password'
+      });
+    }
+
+    // If token is provided, verify it (optional extra security)
+    if (token && user.twoFactorSecret) {
+      const isValid = verifyTwoFactorToken(token, user.twoFactorSecret);
+      if (!isValid) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid 2FA token'
+        });
+      }
+    }
+
+    // Disable 2FA
+    user.isTwoFactorEnabled = false;
+    user.twoFactorSecret = undefined;
+    user.twoFactorBackupCodes = undefined;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: '2FA disabled successfully'
+    });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: error.issues?.map((err: any) => ({
+          path: err.path.join('.'),
+          message: err.message
+        })) || []
+      });
+    }
+
+    console.error('Disable 2FA error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
   }
 };
 
