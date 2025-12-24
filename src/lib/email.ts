@@ -128,3 +128,94 @@ export const sendPasswordResetEmail = async (
 
   await transporter.sendMail(mailOptions);
 };
+
+/**
+ * Send task reminder email
+ * @param email - Recipient email
+ * @param name - User's name
+ * @param taskTitle - Task title
+ * @param taskDescription - Task description
+ * @param dueDate - Task due date
+ * @param priority - Task priority
+ */
+export const sendTaskReminderEmail = async (
+  email: string,
+  name: string,
+  taskTitle: string,
+  taskDescription: string | undefined,
+  dueDate: Date,
+  priority: string
+): Promise<void> => {
+  try {
+    const transporter = createTransporter();
+
+    const formattedDueDate = new Date(dueDate).toLocaleString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const priorityColors: Record<string, string> = {
+      high: '#f44336',
+      medium: '#ff9800',
+      low: '#4CAF50'
+    };
+
+    const priorityColor = priorityColors[priority] || '#2196F3';
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || 'noreply@example.com',
+      to: email,
+      subject: `🔔 Reminder: ${taskTitle}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="background-color: ${priorityColor}; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+            <h2 style="margin: 0; color: white;">🔔 Task Reminder</h2>
+          </div>
+          <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none; border-radius: 0 0 5px 5px;">
+            <p style="color: #333; font-size: 16px;">Hello <strong>${name}</strong>!</p>
+            <p style="color: #666;">This is a reminder about your upcoming task:</p>
+            
+            <div style="background-color: white; padding: 15px; border-left: 4px solid ${priorityColor}; margin: 20px 0; border-radius: 4px;">
+              <h3 style="margin-top: 0; color: #333;">${taskTitle}</h3>
+              ${taskDescription ? `<p style="color: #666; margin: 10px 0;">${taskDescription}</p>` : ''}
+              <div style="margin-top: 15px;">
+                <p style="margin: 5px 0; color: #666;">
+                  <strong style="color: #333;">Due Date:</strong> ${formattedDueDate}
+                </p>
+                <p style="margin: 5px 0; color: #666;">
+                  <strong style="color: #333;">Priority:</strong> 
+                  <span style="color: ${priorityColor}; font-weight: bold; text-transform: capitalize;">${priority}</span>
+                </p>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/tasks" 
+                 style="background-color: ${priorityColor}; color: white; padding: 12px 30px; 
+                        text-decoration: none; border-radius: 5px; display: inline-block;">
+                View Task
+              </a>
+            </div>
+            
+            <p style="color: #999; font-size: 12px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 15px;">
+              This is an automated reminder. You can manage your task reminders in your task tracker app.
+            </p>
+          </div>
+        </div>
+      `
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Task reminder email sent successfully to ${email}:`, info.messageId);
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`Preview URL: ${nodemailer.getTestMessageUrl(info)}`);
+    }
+  } catch (error: any) {
+    console.error(`❌ Error sending task reminder email to ${email}:`, error.message);
+    throw error;
+  }
+};

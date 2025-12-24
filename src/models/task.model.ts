@@ -7,6 +7,8 @@ export interface ITask extends Document {
   dueDate: Date;
   priority: 'low' | 'medium' | 'high';
   reminder?: Date;
+  reminderType?: '1hour' | '1day' | 'custom';
+  reminderSent?: boolean; // Track if reminder has been sent
   status: 'pending' | 'in-progress' | 'completed';
   userId: Types.ObjectId;
   completedAt?: Date;
@@ -39,15 +41,16 @@ const taskSchema = new Schema<ITask>(
       default: 'medium'
     },
     reminder: {
-      type: Date,
-      validate: {
-        validator: function (this: ITask, value: Date) {
-          // Reminder should be before or equal to due date
-          if (!value) return true;
-          return value <= this.dueDate;
-        },
-        message: 'Reminder date must be before or equal to due date'
-      }
+      type: Date
+    },
+    reminderType: {
+      type: String,
+      enum: ['1hour', '1day', 'custom'],
+      default: 'custom'
+    },
+    reminderSent: {
+      type: Boolean,
+      default: false
     },
     status: {
       type: String,
@@ -73,6 +76,7 @@ const taskSchema = new Schema<ITask>(
 taskSchema.index({ userId: 1, status: 1 });
 taskSchema.index({ userId: 1, dueDate: 1 });
 taskSchema.index({ userId: 1, priority: 1 });
+taskSchema.index({ reminder: 1, reminderSent: 1 }); // Index for reminder queries
 
 // Middleware: Set completedAt when status changes to 'completed'
 taskSchema.pre('save', async function () {

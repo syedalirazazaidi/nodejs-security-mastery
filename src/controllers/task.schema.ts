@@ -28,6 +28,11 @@ export const createTaskSchema = z.object({
       })
       .default('medium')
       .optional(),
+    reminderType: z
+      .enum(['1hour', '1day', 'custom'], {
+        message: 'Reminder type must be 1hour, 1day, or custom'
+      })
+      .optional(),
     reminder: z
       .union([z.string(), z.date()])
       .transform((val) => (typeof val === 'string' ? new Date(val) : val))
@@ -62,6 +67,11 @@ export const updateTaskSchema = z.object({
     priority: z
       .enum(['low', 'medium', 'high'], {
         message: 'Priority must be low, medium, or high'
+      })
+      .optional(),
+    reminderType: z
+      .enum(['1hour', '1day', 'custom'], {
+        message: 'Reminder type must be 1hour, 1day, or custom'
       })
       .optional(),
     reminder: z

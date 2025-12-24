@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import Task from '../models/task.model';
 import { isOwnerOrAdmin } from '../middleware/authorize';
+import { calculateReminderDate } from '../services/reminder.service';
 import {
   createTaskSchema,
   updateTaskSchema,
@@ -19,7 +20,7 @@ export const createTask = async (req: Request, res: Response) => {
       body: req.body
     });
 
-    const { title, description, dueDate, priority, reminder } = validated.body;
+    const { title, description, dueDate, priority, reminderType, reminder } = validated.body;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -29,8 +30,20 @@ export const createTask = async (req: Request, res: Response) => {
       });
     }
 
+    // Calculate reminder date based on reminder type
+    let calculatedReminder: Date | undefined;
+    const finalReminderType = reminderType || 'custom';
+
+    if (finalReminderType === 'custom' && reminder) {
+      // Use custom reminder date
+      calculatedReminder = reminder;
+    } else if (finalReminderType !== 'custom') {
+      // Calculate reminder date based on type (1hour or 1day)
+      calculatedReminder = calculateReminderDate(dueDate, finalReminderType);
+    }
+
     // Validate reminder is before or equal to due date
-    if (reminder && reminder > dueDate) {
+    if (calculatedReminder && calculatedReminder > dueDate) {
       return res.status(400).json({
         success: false,
         message: 'Reminder date must be before or equal to due date'
@@ -43,7 +56,9 @@ export const createTask = async (req: Request, res: Response) => {
       description,
       dueDate,
       priority: priority || 'medium',
-      reminder,
+      reminderType: finalReminderType,
+      reminder: calculatedReminder,
+      reminderSent: false,
       userId,
       status: 'pending'
     });
@@ -226,7 +241,7 @@ export const updateTask = async (req: Request, res: Response) => {
 
     const { id } = req.params;
     const userId = req.user?.id;
-    const { title, description, dueDate, priority, reminder, status } = validated.body;
+    const { title, description, dueDate, priority, reminderType, reminder, status } = validated.body;
 
     if (!userId) {
       return res.status(401).json({
@@ -252,11 +267,26 @@ export const updateTask = async (req: Request, res: Response) => {
       });
     }
 
-    // Validate reminder is before or equal to due date (if both are being updated)
+    // Calculate reminder date if reminderType is provided
     const finalDueDate = dueDate || task.dueDate;
-    const finalReminder = reminder !== undefined ? reminder : task.reminder;
+    let calculatedReminder: Date | undefined;
 
-    if (finalReminder && finalReminder > finalDueDate) {
+    if (reminderType) {
+      if (reminderType === 'custom' && reminder !== undefined) {
+        calculatedReminder = reminder || undefined;
+      } else if (reminderType !== 'custom') {
+        calculatedReminder = calculateReminderDate(finalDueDate, reminderType);
+      }
+    } else if (reminder !== undefined) {
+      // If only reminder is provided (backward compatibility)
+      calculatedReminder = reminder || undefined;
+    } else {
+      // Keep existing reminder if nothing is provided
+      calculatedReminder = task.reminder;
+    }
+
+    // Validate reminder is before or equal to due date
+    if (calculatedReminder && calculatedReminder > finalDueDate) {
       return res.status(400).json({
         success: false,
         message: 'Reminder date must be before or equal to due date'
@@ -268,7 +298,19 @@ export const updateTask = async (req: Request, res: Response) => {
     if (description !== undefined) task.description = description;
     if (dueDate !== undefined) task.dueDate = dueDate;
     if (priority !== undefined) task.priority = priority;
-    if (reminder !== undefined) task.reminder = reminder || undefined;
+    if (reminderType !== undefined) {
+      task.reminderType = reminderType;
+      task.reminder = calculatedReminder;
+      // Reset reminderSent if reminder is changed
+      if (calculatedReminder !== task.reminder) {
+        task.reminderSent = false;
+      }
+    } else if (reminder !== undefined) {
+      task.reminder = calculatedReminder;
+      if (calculatedReminder !== task.reminder) {
+        task.reminderSent = false;
+      }
+    }
     if (status !== undefined) task.status = status;
 
     await task.save();
